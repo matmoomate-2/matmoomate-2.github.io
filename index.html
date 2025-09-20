@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>R6 Hidden MMR Calculator</title>
+  <style>
+    body {
+      background: #0f0f14;
+      color: #e6eef8;
+      font-family: "Segoe UI", sans-serif;
+      margin: 0;
+      padding: 20px;
+    }
+    h1 { color: #4f9dff; }
+    .card {
+      background: #171724;
+      padding: 16px;
+      border-radius: 12px;
+      margin-bottom: 20px;
+    }
+    label { display: block; margin-top: 8px; }
+    input {
+      background: #1f1f2b;
+      border: none;
+      padding: 6px;
+      border-radius: 6px;
+      color: #e6eef8;
+      width: 120px;
+    }
+    button {
+      background: #4f9dff;
+      color: white;
+      border: none;
+      padding: 10px 16px;
+      margin-top: 12px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    button:hover { background: #3d87e0; }
+    pre {
+      background: #1f1f2b;
+      padding: 12px;
+      border-radius: 8px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>R6 Hidden MMR Calculator</h1>
+  <div class="card">
+    <label>Observed gain (per win)</label>
+    <input id="gain" type="number" value="25">
+
+    <label>Observed loss (per loss)</label>
+    <input id="loss" type="number" value="25">
+
+    <label>Current shown MMR</label>
+    <input id="shown" type="number" value="0">
+
+    <label>Default baseline (new players)</label>
+    <input id="default" type="number" value="25">
+
+    <label>(Optional) Sequence (W/L)</label>
+    <input id="seq" type="text" placeholder="e.g. WLWLL">
+
+    <br>
+    <button onclick="calculate()">Calculate</button>
+  </div>
+
+  <pre id="output"></pre>
+
+<script>
+// ---------------- Rank mapping ----------------
+const TIERS = [
+  ["Copper", 1000],
+  ["Bronze", 1600],
+  ["Silver", 2100],
+  ["Gold", 2600],
+  ["Platinum", 3200],
+  ["Emerald", 3700],
+  ["Diamond", 4100],
+];
+const DIVISIONS = ["V", "IV", "III", "II", "I"];
+
+let RANK_TO_MMR = {};
+for (const [tier, start] of TIERS) {
+  DIVISIONS.forEach((d, i) => {
+    RANK_TO_MMR[`${tier} ${d}`] = start + i * 100;
+  });
+}
+RANK_TO_MMR["Champion"] = 5000;
+
+function mmrToRank(mmr) {
+  let items = Object.entries(RANK_TO_MMR).sort((a, b) => a[1] - b[1]);
+  let prevName = "Unranked", prevMmr = 0, curName, curM, nextName, nextM;
+
+  for (let [name, thresh] of items) {
+    if (mmr < thresh) {
+      nextName = name; nextM = thresh;
+      curName = prevName; curM = prevMmr;
+      break;
+    }
+    [prevName, prevMmr] = [name, thresh];
+  }
+  if (!curName) {
+    curName = prevName; curM = prevMmr;
+    nextName = null; nextM = null;
+  }
+
+  if (curName === "Unranked") {
+    [curName, curM] = items[0];
+    [nextName, nextM] = items[1];
+  }
+
+  let progress = nextM ? (mmr - curM) / (nextM - curM) : 1.0;
+  progress = Math.max(0, Math.min(1, progress));
+  return [curName, curM, nextM ?? curM, progress];
+}
+
+// ---------------- Calculator ----------------
+class R6HiddenMMRCalculator {
+  constructor(shown, observedGain=25, observedLoss=25, defaultGain=25) {
+    this.shown = shown;
+    this.observedGain = observedGain;
+    this.observedLoss = Math.abs(observedLoss);
+    this.defaultGain = defaultGain;
+
+    let winOffset = this.observedGain - this.defaultGain;
+    let lossOffset = this.defaultGain - this.observedLoss;
+    this.inferredOffset = (winOffset + lossOffset) / 2;
+
+    this.hiddenMid = this.shown + this.inferredOffset;
+    this.hiddenMin = this.hiddenMid - 0.5;
+    this.hiddenMax = this.hiddenMid + 0.499999;
+    this.hiddenGain = this.observedGain;
+    this.hiddenLoss = this.observedLoss;
+  }
+
+  shownAfterWin(hidden) { return Math.round(hidden + this.hiddenGain); }
+  shownAfterLoss(hidden) { return Math.round(hidden - this.hiddenLoss); }
+
+  singleMatchRanges() {
+    return [
+      `${this.shownAfterWin(this.hiddenMin)} — ${this.shownAfterWin(this.hiddenMax)}`,
+      `${this.shownAfterLoss(this.hiddenMin)} — ${this.shownAfterLoss(this.hiddenMax)}`
+    ];
+  }
+
+  simulate(seq, start="mid") {
+    let hidden = (start==="min") ? this.hiddenMin :
+                 (start==="max") ? this.hiddenMax :
+                 this.hiddenMid;
+    let steps = [[`start`, hidden.toFixed(4), Math.round(hidden)]];
+    for (let ch of seq.toUpperCase()) {
+      if (ch==="W") {
+        hidden += this.hiddenGain;
+        steps.push(["win", hidden.toFixed(4), Math.round(hidden)]);
+      } else if (ch==="L") {
+        hidden -= this.hiddenLoss;
+        steps.push(["loss", hidden.toFixed(4), Math.round(hidden)]);
+      }
+    }
+    return steps;
+  }
+}
+
+function calculate() {
+  let gain = parseFloat(document.getElementById("gain").value);
+  let loss = parseFloat(document.getElementById("loss").value);
+  let shown = parseFloat(document.getElementById("shown").value);
+  let def = parseFloat(document.getElementById("default").value);
+  let seq = document.getElementById("seq").value;
+
+  let calc = new R6HiddenMMRCalculator(shown, gain, loss, def);
+  let [winRange, lossRange] = calc.singleMatchRanges();
+  let [rankName, rankMmr, nextMmr, progress] = mmrToRank(calc.hiddenMid);
+
+  let out = "";
+  out += `Observed gain: ${gain}, loss: ${loss}, default baseline: ${def}\n\n`;
+  out += `Inferred offset: ${calc.inferredOffset.toFixed(2)}\n`;
+  out += `Estimated hidden MMR (mid): ${calc.hiddenMid.toFixed(3)}\n`;
+  out += `Hidden range mapping: ${calc.hiddenMin.toFixed(4)} — ${calc.hiddenMax.toFixed(4)}\n\n`;
+
+  let pct = Math.round(progress*100);
+  let nxt = (nextMmr===rankMmr) ? "(top)" : `-> next at ${nextMmr} (${pct}% to next)`;
+  out += `Estimated Rank: ${rankName} (threshold ${rankMmr}) ${nxt}\n\n`;
+
+  out += `If Win: ${winRange}\n`;
+  out += `If Loss: ${lossRange}\n\n`;
+
+  if (seq && /[WL]/i.test(seq)) {
+    for (let start of ["mid","min","max"]) {
+      out += `Simulation (${start} start):\n`;
+      for (let [ev,hid,sh] of calc.simulate(seq,start)) {
+        out += `  ${ev.padEnd(5)} hidden ${hid}, shown ${sh}\n`;
+      }
+      out += "\n";
+    }
+  }
+
+  document.getElementById("output").textContent = out;
+}
+</script>
+</body>
+</html>
