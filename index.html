@@ -183,7 +183,8 @@ function calculate() {
 
   let pct = Math.round(progress*100);
   let nxt = (nextMmr===rankMmr) ? "(top)" : `-> next at ${nextMmr} (${pct}% to next)`;
-  out += `Estimated Rank: ${rankName} (threshold ${rankMmr}) ${nxt}\n\n`;
+  out += `Estimated Rank (based on shown MMR): ${rankName} (threshold ${rankMmr}) ${nxt}\n`;
+  out += `Estimated Hidden Rank (based on hidden MMR): ${mmrToRank(calc.hiddenMid)[0]}\n\n`;
 
   out += `If Win: ${winRange}\n`;
   out += `If Loss: ${lossRange}\n\n`;
@@ -197,7 +198,6 @@ function calculate() {
       out += "\n";
     }
   }
-
   document.getElementById("output").textContent = out;
 }
 </script>
